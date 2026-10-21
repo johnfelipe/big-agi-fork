@@ -66,6 +66,7 @@ ELEVENLABS_VOICE_ID=
 # Backend HTTP Basic Authentication (see `deploy-authentication.md` for turning on authentication)
 HTTP_BASIC_AUTH_USERNAME=
 HTTP_BASIC_AUTH_PASSWORD=
+SERVER_KEYS_ALLOW_ANONYMOUS=
 
 
 # Frontend variables 
@@ -91,6 +92,9 @@ For Database configuration see [deploy-database.md](deploy-database.md).
 
 The following variables when set will enable the corresponding LLMs on the server-side, without
 requiring the user to enter an API key
+
+In production, server-side keys are used only when HTTP Basic Auth is configured or `SERVER_KEYS_ALLOW_ANONYMOUS=true`
+is set - see [Authentication](deploy-authentication.md).
 
 | Variable                    | Description                                                                                                    | Required                                                          |
 |-----------------------------|----------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------|
@@ -147,6 +151,7 @@ Enable the app to Talk, Draw, and Google things up.
 | **Backend**                |                                                                                                                         |
 | `HTTP_BASIC_AUTH_USERNAME` | See the [Authentication](deploy-authentication.md) guide. Username for HTTP Basic Authentication.                       |
 | `HTTP_BASIC_AUTH_PASSWORD` | Password for HTTP Basic Authentication.                                                                                 |
+| `SERVER_KEYS_ALLOW_ANONYMOUS` | Set to `true` to use server-side API keys without HTTP Basic Auth (production). Only behind platform auth or on a private network. |
 
 ### Frontend Variables
 
