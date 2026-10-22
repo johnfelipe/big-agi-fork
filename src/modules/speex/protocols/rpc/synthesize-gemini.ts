@@ -139,7 +139,8 @@ export async function listVoicesGemini(access: SpeexWire_Access_Gemini): Promise
 function _geminiAccessFromWire(access: SpeexWire_Access_Gemini): GeminiAccessSchema {
   return {
     dialect: 'gemini',
-    clientSideFetch: access.clientSideFetch,
+    // CSF puts the key in the query string: honor it only in the browser, never on the server (env key fallback)
+    clientSideFetch: typeof window !== 'undefined' && !!access.clientSideFetch,
     geminiKey: access.apiKey || '',
     geminiHost: access.apiHost || '',
     minSafetyLevel: 'HARM_BLOCK_THRESHOLD_UNSPECIFIED', // schema-required; TTS has no safety settings

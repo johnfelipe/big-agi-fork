@@ -256,7 +256,7 @@ async function _fetchFromTRPC<TBody extends object | undefined | FormData, TOut>
     if (SERVER_DEBUG_WIRE || SERVER_LOG_FETCHERS_ERRORS) {
       if (prettyShowUrl && !SERVER_DEBUG_WIRE)
         // expected user-misconfig (unreachable/wrong URL): compact line - the thrown error carries the full message to the client
-        console.log(`[${method}] [${moduleName} network issue]: ${connErrorName} -> ${debugCleanUrl || url}`);
+        console.log(`[${method}] [${moduleName} network issue]: ${connErrorName} -> ${debugCleanUrl || _redactUrlQuery(url)}`);
       else
         console.log(`[${method}] [${moduleName} network issue]: "${errorString}"`, { error, _cause, debugCleanUrl, urlShown: prettyShowUrl });
     }
@@ -305,7 +305,7 @@ async function _fetchFromTRPC<TBody extends object | undefined | FormData, TOut>
     }
 
     if (SERVER_DEBUG_WIRE || SERVER_LOG_FETCHERS_ERRORS)
-      console.log(`[${method}->${parserName}] [${moduleName} issue] (http ${s}, ${response.statusText}):`, { url, responseOk: response.ok, notOkayPayload: payloadString || notOkayPayload });
+      console.log(`[${method}->${parserName}] [${moduleName} issue] (http ${s}, ${response.statusText}):`, { url: _redactUrlQuery(url), responseOk: response.ok, notOkayPayload: payloadString || notOkayPayload });
 
     // -> throw HTTP error: will be a 400 (BAD_REQUEST), with preserved status
     // machine-readable upstream code: the message alone cannot tell a temporary 429 from a permanent one
@@ -337,7 +337,7 @@ async function _fetchFromTRPC<TBody extends object | undefined | FormData, TOut>
     // [logging - Parsing error] candidate for the logging system
     if (SERVER_DEBUG_WIRE || SERVER_LOG_FETCHERS_ERRORS) {
       // WARN because we want to understand if something is wrong with the upstream APIs, otherwise HTTP errors are expected and simply logged
-      console.warn(`[${method}] [${moduleName}]: (${parserName} parsing error): ${error?.name}`, { error, url });
+      console.warn(`[${method}] [${moduleName}]: (${parserName} parsing error): ${error?.name}`, { error, url: _redactUrlQuery(url) });
     }
 
     // Forward already processed Parsing error, adding the module name if required
@@ -425,6 +425,19 @@ async function _jsonResponseParserOrThrow(response: Response) {
 
   }
   // unreachable
+}
+
+/** For logging: replace query param values (may carry keys, e.g. Gemini `?key=`) with REDACTED. */
+function _redactUrlQuery(url: string): string {
+  try {
+    const parsed = new URL(url);
+    for (const key of [...parsed.searchParams.keys()])
+      parsed.searchParams.set(key, 'REDACTED');
+    return parsed.toString();
+  } catch {
+    const queryStart = url.indexOf('?');
+    return queryStart === -1 ? url : url.slice(0, queryStart) + '?[REDACTED]';
+  }
 }
 
 function _period(s: string) {
