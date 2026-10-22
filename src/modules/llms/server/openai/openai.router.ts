@@ -450,7 +450,7 @@ export const llmOpenAIRouter = createTRPCRouter({
   dialectLocalAI_galleryModelsJob: edgeProcedure
     .input(z.object({
       access: openAIAccessSchema,
-      jobId: z.guid(),
+      jobId: z.guid(), // LocalAI job uuid
     }))
     .query(async ({ input: { access, jobId } }) => {
       localAIAdminCheckOrThrow(access);

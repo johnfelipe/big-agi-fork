@@ -21,13 +21,13 @@ import { TooltipOutlined } from '~/common/components/TooltipOutlined';
 import { adjustContentScaling, themeScalingMap } from '~/common/app.theme';
 import { avatarIconSx, makeMessageAvatarIcon, messageBackground, useMessageAvatarLabel } from '~/common/util/dMessageUtils';
 import { clipboardCopyDOMSelectionOrFallback, copyToClipboard } from '~/common/util/clipboardUtils';
-import { createTextContentFragment, DMessageFragment, DMessageFragmentId, updateFragmentWithEditedText } from '~/common/stores/chat/chat.fragments';
-import { useFragmentBuckets } from '~/common/stores/chat/hooks/app-chat/useFragmentBuckets';
+import { createTextContentFragment, DMessageFragment, DMessageFragmentId, isContentFragment, isTextContentFragment, updateFragmentWithEditedText } from '~/common/stores/chat/chat.fragments';
+import { findFirstUserPromptFragment } from '~/common/stores/chat/chat.fragment-order';
 import { useUIPreferencesStore } from '~/common/stores/store-ui';
 import { useUXLabsStore } from '~/common/stores/store-ux-labs';
 
 import { BlockOpContinue } from './BlockOpContinue';
-import { BlockOpOptions, optionsExtractFromFragments_dangerModifyFragment } from './BlockOpOptions';
+import { BlockOpOptions } from './BlockOpOptions';
 import { BlockOpResolveLinks } from './BlockOpResolveLinks';
 import { BlockOpUpstreamResume } from './BlockOpUpstreamResume';
 import { ChatMessageBubble } from './ChatMessageBubble';
@@ -35,11 +35,10 @@ import { ChatMessageEditAttachments, type EditModeAttachmentsHandle } from './Ch
 import { ChatMessageInfoPopup } from './ChatMessageInfoPopup';
 import { ChatMessageMenu } from './ChatMessageMenu';
 import { ChatMessageTimestamp } from './ChatMessageTimestamp';
-import { ContentFragments } from './fragments-content/ContentFragments';
-import { DocumentAttachmentFragments } from './fragments-attachment-doc/DocumentAttachmentFragments';
-import { ImageAttachmentFragments } from './fragments-attachment-image/ImageAttachmentFragments';
+import type { CMBuildOptions } from './render-tree/cmRenderTree.build';
+import { CMRenderTreeNodes } from './render-tree/CMRenderTreeNodes';
 import { InReferenceToList } from './in-reference-to/InReferenceToList';
-import { VoidFragments } from './fragments-void/VoidFragments';
+import { useCMRenderTree } from './render-tree/useCMRenderTree';
 import { messageAsideColumnSx, messageAvatarLabelAnimatedSx, messageAvatarLabelSx, messageEditBeamControlsTopSx, messageMobileHeaderSx, messageZenAsideColumnSx } from './ChatMessage.styles';
 import { useSelHighlighterMemo } from './useSelHighlighterMemo';
 
@@ -375,7 +374,10 @@ export function ChatMessage(props: {
   })));
   const _setContextHighlightText = useERCDiffActions()?.setContextHighlightText;
   const setContextHighlightText = devsUISymbolHighlight ? _setContextHighlightText : undefined;
-  const labsUserMarkdown = useUXLabsStore(state => state.labsUserMarkdown);
+  const { labsUngroupedFragments, labsUserMarkdown } = useUXLabsStore(useShallow(state => ({
+    labsUngroupedFragments: state.labsUngroupedFragments,
+    labsUserMarkdown: state.labsUserMarkdown,
+  })));
 
 
   // derived state
@@ -404,18 +406,24 @@ export function ChatMessage(props: {
   const isVndAndCacheAuto = !!props.showAntPromptCaching && messageHasUserFlag(props.message, MESSAGE_FLAG_VND_ANT_CACHE_AUTO);
   const isVndAndCacheUser = !!props.showAntPromptCaching && messageHasUserFlag(props.message, MESSAGE_FLAG_VND_ANT_CACHE_USER);
 
-  const {
-    annotationFragments,    // Web Citations, References (rendered at top)
-    interleavedFragments,   // Reasoning, Placeholders, Text, Code, Tools (interleaved in temporal order)
-    imageAttachments,       // Stamp-sized Images
-    nonImageAttachments,    // Document Attachments, likely the User dropped them in
-  } = useFragmentBuckets(messageFragments);
+  // Text editing state (handlers below); the render tree switches to edit nodes when edits can be written back
+  const isEditingText = !!textContentEditState;
+  const canEditText = !!props.onMessageFragmentReplace && !messagePendingIncomplete;
+
+  // Options interceptor: a trailing option list on the last text block becomes continuation buttons
+  const lookForOptions = props.onMessageContinue !== undefined && props.isBottom === true && !msgGenOutOfTokens && fromAssistant && !messagePendingIncomplete && !isEditingText && uiComplexityMode !== 'minimal' && false;
+
+  // Render tree: fragments grouped into nodes in message order, citations first; stable across streaming appends
+  const renderTreeOptions = React.useMemo((): CMBuildOptions => ({ trailingOptions: lookForOptions, ungrouped: labsUngroupedFragments }), [labsUngroupedFragments, lookForOptions]);
+  const renderTree = useCMRenderTree(messageFragments, isEditingText && canEditText ? 'edit' : 'view', renderTreeOptions);
+  const { trailingOptions } = renderTree;
 
   // Activity follows the raw stream order, independent of display filtering and injected layout.
   const inFluxFragmentId = React.useMemo(() => messageFragmentsInFluxId(messageFragments, !!messagePendingIncomplete), [messageFragments, messagePendingIncomplete]);
 
   const fragmentFlattenedText = React.useMemo(() => messageFragmentsReduceText(messageFragments), [messageFragments]);
-  const contentFragments = React.useMemo(() => interleavedFragments.filter(f => f.ft === 'content'), [interleavedFragments]);
+  const userPromptText = React.useMemo(() => findFirstUserPromptFragment(messageFragments)?.part.text ?? '', [messageFragments]);
+  const contentFragments = React.useMemo(() => messageFragments.filter(isContentFragment), [messageFragments]);
   const handleHighlightSelText = useSelHighlighterMemo(messageId, selText, contentFragments, fromAssistant, props.onMessageFragmentReplace);
 
   // [#1114] Vertex AI grounding redirect links present in this message (skip the scan while streaming - the button is gated on completion anyway)
@@ -424,14 +432,15 @@ export function ChatMessage(props: {
   }, [fromAssistant, messagePendingIncomplete, messageFragments]);
 
   const textSubject = selText ? selText : fragmentFlattenedText;
-  const isSpecialT2I = textSubject.startsWith('/draw ') || textSubject.startsWith('/imagine ') || textSubject.startsWith('/img ');
+  const t2iSubject = selText ?? userPromptText;
+  const isSpecialT2I = t2iSubject.startsWith('/draw ') || t2iSubject.startsWith('/imagine ') || t2iSubject.startsWith('/img ');
   const couldDiagram = textSubject.length >= 100 && !isSpecialT2I;
   const couldImagine = textSubject.length >= 3 && !isSpecialT2I;
   const couldSpeak = couldImagine;
 
   const userCommandApprox = !fromUser ? false
-    : fragmentFlattenedText.startsWith('/draw ') ? 'draw'
-      : fragmentFlattenedText.startsWith('/react ') ? 'react'
+    : userPromptText.startsWith('/draw ') ? 'draw'
+      : userPromptText.startsWith('/react ') ? 'react'
         : false;
 
 
@@ -454,15 +463,14 @@ export function ChatMessage(props: {
   }, [messageId, onMessageFragmentReplace]);
 
   const handleFragmentsReorder = React.useCallback((reorderedIds: DMessageFragmentId[]) => {
-    onMessageFragmentsReorder?.(messageId, reorderedIds, 'end');
+    // Only the listed fragments move; every other fragment keeps its slot. A stale drag result (ids gone or repeated) is ignored.
+    const fragments = messageRef.current.fragments;
+    const moving = new Set(reorderedIds);
+    if (moving.size !== reorderedIds.length || !reorderedIds.every(id => fragments.some(fragment => fragment.fId === id)))
+      return;
+    let next = 0;
+    onMessageFragmentsReorder?.(messageId, fragments.map(({ fId }) => moving.has(fId) ? reorderedIds[next++] : fId), 'end');
   }, [messageId, onMessageFragmentsReorder]);
-
-  const handleImagesReorder = React.useCallback((reorderedIds: DMessageFragmentId[]) => {
-    // Keep text and documents in their original slots.
-    const imageIds = new Set(reorderedIds);
-    let imageIndex = 0;
-    handleFragmentsReorder(messageFragments.map(({ fId }) => imageIds.has(fId) ? reorderedIds[imageIndex++] : fId));
-  }, [handleFragmentsReorder, messageFragments]);
 
   const handleResolveVertexLinks = React.useCallback(async () => {
     const outcome = await vertexLinksResolveFragments(messageFragments);
@@ -508,8 +516,6 @@ export function ChatMessage(props: {
 
 
   // Text Editing
-
-  const isEditingText = !!textContentEditState;
 
   const handleApplyEdit = React.useCallback((fragmentId: DMessageFragmentId, editedText: string) => {
     // perform deletion of the fragment if the text is empty
@@ -805,19 +811,11 @@ export function ChatMessage(props: {
   }, [handleOpenBubble]);
 
 
-  // Options interceptor
-
-  const lookForOptions = onMessageContinue !== undefined && props.isBottom === true && !msgGenOutOfTokens && fromAssistant && !messagePendingIncomplete && !isEditingText && uiComplexityMode !== 'minimal' && false;
-
-  const { fragments: renderInterleavedFragments, options: continuationOptions, trimmedFragment } = React.useMemo(() => {
-    return optionsExtractFromFragments_dangerModifyFragment(lookForOptions, interleavedFragments);
-  }, [interleavedFragments, lookForOptions]);
-
   const handleRenderedTextEdit = React.useCallback((fragmentId: DMessageFragmentId, editedText: string, applyNow: boolean) => {
     // Restore hidden options before saving or checking for deletion. Full-text editing is untrimmed.
-    const sourceText = applyNow && trimmedFragment?.fragmentId === fragmentId ? editedText + trimmedFragment.suffix : editedText;
+    const sourceText = applyNow && trailingOptions?.fragmentId === fragmentId ? editedText + trailingOptions.suffix : editedText;
     handleEditSetText(fragmentId, sourceText, applyNow);
-  }, [handleEditSetText, trimmedFragment]);
+  }, [handleEditSetText, trailingOptions]);
 
 
   // style
@@ -1002,36 +1000,12 @@ export function ChatMessage(props: {
             <InReferenceToList items={messageMetadata.inReferenceTo} />
           )}
 
-          {/* [NOT SYSTEM, UNREAL] Image Attachment Fragments - just for a prettier display on top of the message, but is "WRONG" logically as the text comes before the image */}
-          {!fromSystem && imageAttachments.length >= 1 && (
-            <ImageAttachmentFragments
-              imageAttachments={imageAttachments}
-              contentScaling={adjContentScaling}
-              messageRole={messageRole}
-              isEditing={isEditingText}
-              onFragmentDelete={!onMessageFragmentDelete ? undefined : handleFragmentDelete}
-              onFragmentsReorder={isEditingText && onMessageFragmentsReorder ? handleImagesReorder : undefined}
-            />
-          )}
-
-          {/* Annotation Fragments (absolute top: citations, references) */}
-          {annotationFragments.length >= 1 && (
-            <VoidFragments
-              voidFragments={annotationFragments}
-              nonVoidFragmentsCount={contentFragments.length}
-              contentScaling={adjContentScaling}
-              uiComplexityMode={uiComplexityMode}
-              messageRole={messageRole}
-              messagePendingIncomplete={messagePendingIncomplete}
-              onFragmentDelete={!onMessageFragmentDelete ? undefined : handleFragmentDelete}
-              onFragmentReplace={!onMessageFragmentReplace ? undefined : handleFragmentReplace}
-            />
-          )}
-
-          {/* Interleaved Fragments (reasoning + content in temporal order) */}
-          <ContentFragments
-            contentFragments={renderInterleavedFragments}
+          {/* Render tree: citations first, then content and attachments in message order */}
+          <CMRenderTreeNodes
+            tree={renderTree}
+            inFluxFragmentId={inFluxFragmentId}
             showEmptyNotice={!messageFragments.length && !messagePendingIncomplete}
+            showAddText={isEditingText && !!onMessageFragmentAppend && !messageFragments.some(isTextContentFragment)}
 
             contentScaling={adjContentScaling}
             uiComplexityMode={uiComplexityMode}
@@ -1041,18 +1015,19 @@ export function ChatMessage(props: {
             messageRole={messageRole}
             messageGeneratorLlmId={messageGenerator?.mgt === 'aix' ? messageGenerator.aix?.mId : undefined}
             messagePendingIncomplete={messagePendingIncomplete}
-            inFluxFragmentId={inFluxFragmentId}
             disableMarkdownText={disableMarkdown || (fromUser && !userMarkdown) /* user messages: plain text, unless Labs or this message's menu says markdown */}
+            disableMarkdownDocuments={disableMarkdown}
             htmlRenderVariant={props.htmlRenderVariant}
 
             textEditsState={textContentEditState}
-            setEditedText={(!onMessageFragmentReplace || messagePendingIncomplete) ? undefined : handleRenderedTextEdit}
+            setEditedText={canEditText ? handleRenderedTextEdit : undefined}
             onEditsApply={handleApplyAllEdits}
             onEditsCancel={handleEditsCancel}
 
             onFragmentAddBlank={!onMessageFragmentAppend ? undefined : handleFragmentNew}
             onFragmentDelete={!onMessageFragmentDelete ? undefined : handleFragmentDelete}
             onFragmentReplace={!onMessageFragmentReplace ? undefined : handleFragmentReplace}
+            onFragmentsReorder={!onMessageFragmentsReorder ? undefined : handleFragmentsReorder}
             onMessageDelete={!onMessageDelete ? undefined : handleMessageDelete}
 
             onDoubleClick={(onMessageFragmentReplace /*&& doubleClickToEdit disabled, as we may have shift too */) ? handleBlocksDoubleClick : undefined}
@@ -1068,41 +1043,11 @@ export function ChatMessage(props: {
             />
           )}
 
-          {/* Document Fragments */}
-          {nonImageAttachments.length >= 1 && (
-            <DocumentAttachmentFragments
-              attachmentFragments={nonImageAttachments}
-              messageRole={messageRole}
-              renderVariant='chat-message'
-              contentScaling={adjContentScaling}
-              isMobile={props.isMobile}
-              zenMode={zenMode}
-              allowSelection={!isEditingText}
-              allowReordering={isEditingText}
-              disableMarkdownText={disableMarkdown}
-              onFragmentDelete={!onMessageFragmentDelete ? undefined : handleFragmentDelete}
-              onFragmentReplace={!onMessageFragmentReplace ? undefined : handleFragmentReplace}
-              onFragmentsReorder={!onMessageFragmentsReorder ? undefined : handleFragmentsReorder}
-            />
-          )}
-
-          {/* [Edit Mode] Add new attachments (right below the Document Fragments) */}
+          {/* [Edit Mode] Add new attachments */}
           {isEditingText && !fromAssistant && !!onMessageFragmentAppend && (
             <ChatMessageEditAttachments
               ref={attachmentsEditRef}
               isMobile={props.isMobile}
-            />
-          )}
-
-          {/* [SYSTEM, REAL] Image Attachment Fragments - just for a realistic display below the system instruction text/docs */}
-          {fromSystem && imageAttachments.length >= 1 && (
-            <ImageAttachmentFragments
-              imageAttachments={imageAttachments}
-              contentScaling={adjContentScaling}
-              messageRole={messageRole}
-              isEditing={isEditingText}
-              onFragmentDelete={!onMessageFragmentDelete ? undefined : handleFragmentDelete}
-              onFragmentsReorder={isEditingText && onMessageFragmentsReorder ? handleImagesReorder : undefined}
             />
           )}
 
@@ -1128,10 +1073,10 @@ export function ChatMessage(props: {
           )}
 
           {/* Continue Options... */}
-          {continuationOptions.length >= 1 && !!onMessageContinue && (
+          {!!trailingOptions && !!onMessageContinue && (
             <BlockOpOptions
               contentScaling={adjContentScaling}
-              options={continuationOptions}
+              options={trailingOptions.options}
               onContinue={handleMessageContinue}
             />
           )}
