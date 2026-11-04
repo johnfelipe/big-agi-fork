@@ -7,6 +7,14 @@ in one of the following ways:
 2. Utilize user authentication features provided by your ⬇️ [cloud deployment platform](#cloud-deployments-authentication)
 3. Develop a custom authentication solution
 
+**Server-side API keys** (e.g. `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_CLOUD_API_KEY`, see
+[environment variables](environment-variables.md)) are ignored in production unless one of the following is set:
+
+- `HTTP_BASIC_AUTH_USERNAME` and `HTTP_BASIC_AUTH_PASSWORD` - the API (`/api/edge`, `/api/cloud`) then requires these credentials
+- `SERVER_KEYS_ALLOW_ANONYMOUS=true` - only if access is already restricted (cloud platform authentication, private network), as anyone who can reach the deployment can otherwise spend these keys
+
+Keys entered by users in the UI are not affected.
+
 <br/>
 
 ### HTTP Authentication
@@ -28,6 +36,9 @@ HTTP_BASIC_AUTH_PASSWORD=<your password>
 ```
 
 - Start the application 🔒
+
+Setting the two variables alone already enforces the credentials on the API routes; the `middleware.ts` rename
+additionally protects the pages and makes the browser prompt for the credentials.
 
 <br/>
 

@@ -16,6 +16,19 @@ const isProd = process.env.NODE_ENV === 'production' // True on Vercel and local
   && process.env.NEXT_PUBLIC_VERCEL_TARGET_ENV !== 'preview'; // False on Vercel dev-branch builds ('production' and 'staging' environments are treated as prod)
 const requireOnProd = isProd ? z.string() : z.string().optional();
 
+// Server-side vendor credentials are only honored when callers are authenticated (HTTP Basic Auth, enforced on the
+// tRPC API by trpc.server.ts), or when the operator explicitly accepts anonymous use (e.g. platform-level auth,
+// private network) with SERVER_KEYS_ALLOW_ANONYMOUS=true. Always allowed in development.
+const serverKeysEnabled = (!!process.env.HTTP_BASIC_AUTH_USERNAME && !!process.env.HTTP_BASIC_AUTH_PASSWORD)
+  || process.env.SERVER_KEYS_ALLOW_ANONYMOUS === 'true'
+  || process.env.NODE_ENV !== 'production';
+let serverKeysDropped = false;
+const serverKey = z.string().optional().transform((value) => {
+  if (!value || serverKeysEnabled) return value;
+  serverKeysDropped = true;
+  return undefined;
+});
+
 
 export const env = createEnv({
 
@@ -33,96 +46,96 @@ export const env = createEnv({
 
 
     // LLM: OpenAI
-    OPENAI_API_KEY: z.string().optional(),
+    OPENAI_API_KEY: serverKey,
     OPENAI_API_HOST: z.url().optional(),
     OPENAI_API_ORG_ID: z.string().optional(),
 
     // LLM: Alibaba (OpenAI)
     ALIBABA_API_HOST: z.url().optional(),
-    ALIBABA_API_KEY: z.string().optional(),
+    ALIBABA_API_KEY: serverKey,
 
     // LLM: Azure OpenAI
     AZURE_OPENAI_API_ENDPOINT: z.url().optional(),
-    AZURE_OPENAI_API_KEY: z.string().optional(),
+    AZURE_OPENAI_API_KEY: serverKey,
     // The following do not need to be set
     AZURE_OPENAI_DISABLE_V1: z.string().optional(), // next-gen API is active by default, default: false
     AZURE_OPENAI_API_VERSION: z.string().optional(), // traditional API still used for non-response models, default: '2025-04-01-preview'
     AZURE_DEPLOYMENTS_API_VERSION: z.string().optional(), // default: '2023-03-15-preview'
 
     // LLM: Anthropic
-    ANTHROPIC_API_KEY: z.string().optional(),
+    ANTHROPIC_API_KEY: serverKey,
     ANTHROPIC_API_HOST: z.url().optional(),
 
     // LLM: AWS Bedrock (bearer token OR IAM credentials)
-    BEDROCK_BEARER_TOKEN: z.string().optional(), // Bedrock long-term API key (ABSK...) - takes priority over IAM credentials; short-term keys only work for runtime, not model listing
-    BEDROCK_ACCESS_KEY_ID: z.string().optional(),
-    BEDROCK_SECRET_ACCESS_KEY: z.string().optional(),
-    BEDROCK_SESSION_TOKEN: z.string().optional(), // required with the other 2 on corporate accounts sometimes
+    BEDROCK_BEARER_TOKEN: serverKey, // Bedrock long-term API key (ABSK...) - takes priority over IAM credentials; short-term keys only work for runtime, not model listing
+    BEDROCK_ACCESS_KEY_ID: serverKey,
+    BEDROCK_SECRET_ACCESS_KEY: serverKey,
+    BEDROCK_SESSION_TOKEN: serverKey, // required with the other 2 on corporate accounts sometimes
     BEDROCK_REGION: z.string().optional(),
 
     // LLM: Cerebras
-    CEREBRAS_API_KEY: z.string().optional(),
+    CEREBRAS_API_KEY: serverKey,
 
     // LLM: Deepseek AI
-    DEEPSEEK_API_KEY: z.string().optional(),
+    DEEPSEEK_API_KEY: serverKey,
 
     // LLM: Google AI's Gemini
-    GEMINI_API_KEY: z.string().optional(),
+    GEMINI_API_KEY: serverKey,
 
     // LLM: Groq
-    GROQ_API_KEY: z.string().optional(),
+    GROQ_API_KEY: serverKey,
 
     // LLM: LocalAI
     LOCALAI_API_HOST: z.url().optional(),
-    LOCALAI_API_KEY: z.string().optional(),
+    LOCALAI_API_KEY: serverKey,
 
     // LLM: Meta AI
-    METAAI_API_KEY: z.string().optional(),
+    METAAI_API_KEY: serverKey,
     METAAI_API_HOST: z.url().optional(),
 
     // LLM: Mistral
-    MISTRAL_API_KEY: z.string().optional(),
+    MISTRAL_API_KEY: serverKey,
 
     // LLM: Modular
-    MODULAR_API_KEY: z.string().optional(),
+    MODULAR_API_KEY: serverKey,
 
     // LLM: Moonshot AI
-    MOONSHOT_API_KEY: z.string().optional(),
+    MOONSHOT_API_KEY: serverKey,
 
     // LLM: NVIDIA NIM (build.nvidia.com hosted, or self-hosted NIM/vLLM)
-    NVIDIANIM_API_KEY: z.string().optional(),
+    NVIDIANIM_API_KEY: serverKey,
     NVIDIANIM_API_HOST: z.url().optional(),
 
     // LLM: Ollama
     OLLAMA_API_HOST: z.url().optional(),
 
     // LLM: OpenRouter
-    OPENROUTER_API_KEY: z.string().optional(),
+    OPENROUTER_API_KEY: serverKey,
 
     // LLM: Perplexity
-    PERPLEXITY_API_KEY: z.string().optional(),
+    PERPLEXITY_API_KEY: serverKey,
 
     // LLM: Sakana AI
-    SAKANA_API_KEY: z.string().optional(),
+    SAKANA_API_KEY: serverKey,
     SAKANA_API_HOST: z.url().optional(),
 
     // LLM: Together AI
-    TOGETHERAI_API_KEY: z.string().optional(),
+    TOGETHERAI_API_KEY: serverKey,
 
     // LLM: xAI
-    XAI_API_KEY: z.string().optional(),
+    XAI_API_KEY: serverKey,
 
 
     // Browsing Service
     PUPPETEER_WSS_ENDPOINT: z.url().optional(),
 
     // Google Custom Search
-    GOOGLE_CLOUD_API_KEY: z.string().optional(),
+    GOOGLE_CLOUD_API_KEY: serverKey,
     GOOGLE_CSE_ID: z.string().optional(),
 
 
     // Text-To-Speech: ElevenLabs - speech.ts
-    ELEVENLABS_API_KEY: z.string().optional(),
+    ELEVENLABS_API_KEY: serverKey,
     ELEVENLABS_API_HOST: z.url().optional(),
     ELEVENLABS_VOICE_ID: z.string().optional(),
 
@@ -130,6 +143,9 @@ export const env = createEnv({
     // Backend: HTTP Basic Authentication
     HTTP_BASIC_AUTH_USERNAME: z.string().optional(),
     HTTP_BASIC_AUTH_PASSWORD: z.string().optional(),
+
+    // Backend: use server-side vendor keys without HTTP Basic Auth - only behind platform auth or on a private network
+    SERVER_KEYS_ALLOW_ANONYMOUS: z.enum(['true']).optional(),
 
     // AIX: Strict parsing mode - if omitted: strict in dev (throws on unknown API values), tolerant in prod (warns)
     // Set to 'true' to force strict mode in production (useful for debugging API drift)
@@ -172,3 +188,5 @@ export const env = createEnv({
   },
 });
 
+if (serverKeysDropped)
+  console.warn('[env] Server-side API keys are ignored: set HTTP_BASIC_AUTH_USERNAME and HTTP_BASIC_AUTH_PASSWORD, or SERVER_KEYS_ALLOW_ANONYMOUS=true if access is restricted otherwise. See docs/deploy-authentication.md');

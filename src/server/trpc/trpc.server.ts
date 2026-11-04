@@ -8,7 +8,10 @@
  */
 import type { FetchCreateContextFnOptions } from '@trpc/server/adapters/fetch';
 import * as z from 'zod/v4';
-import { initTRPC } from '@trpc/server';
+import { initTRPC, TRPCError } from '@trpc/server';
+
+import { env } from '~/server/env.server';
+
 import { transformer } from './trpc.transformer';
 import { TRPCFetcherError } from './trpc.router.fetchers';
 
@@ -34,6 +37,8 @@ export const createTRPCFetchContext = async ({ req }: FetchCreateContextFnOption
     hostName: req.headers?.get('host') ?? 'localhost',
     // enables cancelling upstream requests when the downstream request is aborted
     reqSignal: req.signal,
+    // checked by httpBasicAuthMiddleware, when HTTP Basic Auth is configured
+    reqAuthorization: req.headers?.get('authorization') ?? null,
   };
 };
 
@@ -73,6 +78,44 @@ const t = initTRPC.context<typeof createTRPCFetchContext>().create({
 });
 
 /**
+ * HTTP Basic Auth: when HTTP_BASIC_AUTH_USERNAME/PASSWORD are set, every procedure requires matching
+ * credentials, independently of the optional Next.js middleware (middleware_BASIC_AUTH.ts).
+ * Server-side vendor keys are only honored in this configuration (see env.server.ts).
+ */
+function _timingSafeEqual(a: string, b: string): boolean {
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < a.length; i++)
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i % (b.length || 1));
+  return diff === 0;
+}
+
+function _isValidHttpBasicAuth(authorization: string | null, username: string, password: string): boolean {
+  if (!authorization?.startsWith('Basic ')) return false;
+  let credentials: string;
+  try {
+    credentials = atob(authorization.slice(6).trim());
+  } catch {
+    return false;
+  }
+  const sep = credentials.indexOf(':');
+  if (sep < 0) return false;
+  const userOk = _timingSafeEqual(credentials.slice(0, sep), username);
+  const passOk = _timingSafeEqual(credentials.slice(sep + 1), password);
+  return userOk && passOk;
+}
+
+const httpBasicAuthMiddleware = t.middleware(({ ctx, next }) => {
+  const username = env.HTTP_BASIC_AUTH_USERNAME;
+  const password = env.HTTP_BASIC_AUTH_PASSWORD;
+  if (username && password && !_isValidHttpBasicAuth(ctx.reqAuthorization, username, password))
+    throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Unauthorized' });
+  return next();
+});
+
+const baseProcedure = t.procedure.use(httpBasicAuthMiddleware);
+
+
+/**
  * 3. ROUTER & PROCEDURE (THE IMPORTANT BIT)
  *
  * These are the pieces you use to build your tRPC API. You should import these a lot in the
@@ -87,47 +130,45 @@ const t = initTRPC.context<typeof createTRPCFetchContext>().create({
 export const createTRPCRouter = t.router;
 
 /**
- * Public (unprotected) procedure
+ * Public procedure
  *
- * This is the base piece you use to build new queries and mutations on your tRPC API. It does not
- * guarantee that a user querying is authorized, but you can still access user session data if they
- * are logged in.
+ * This is the base piece you use to build new queries and mutations on your tRPC API. No per-user
+ * authorization; only the deployment-wide HTTP Basic Auth check, when configured.
  *
  * @link https://trpc.io/docs/v11/procedures
  */
-export const publicProcedure = t.procedure;
+export const publicProcedure = baseProcedure;
 
 /**
  * Edge procedures for the AI inference Edge network:
  * - AIX streaming endpoints
  * - specific endpoints: Anthropic, Gemini, Ollama, OpenAI
  *
- * Open for now, as these are pass-through with service keys inside the request usually.
- * May be closed in the future if key material is on the server-side procedure, in which case
- * authentication will be required.
+ * Pass-through with service keys inside the request usually. Server-side keys are only used when
+ * HTTP Basic Auth is configured (or explicitly allowed anonymously), see env.server.ts.
  */
-export const edgeProcedure = t.procedure;
+export const edgeProcedure = baseProcedure;
 
 
 /**
- * Authenticated users only. - FORWARD-LOOKING
+ * Authenticated users only. - FORWARD-LOOKING: no per-user auth on this branch, same as publicProcedure
  */
-export const authedProcedure = t.procedure;
+export const authedProcedure = baseProcedure;
 
 /**
  * Premium procedure - FORWARD-LOOKING
  */
-export const premiumProcedure = t.procedure;
+export const premiumProcedure = baseProcedure;
 
 /**
  * User-feature-gated procedure - FORWARD-LOOKING
  */
-export const authGatedProcedure = t.procedure;
+export const authGatedProcedure = baseProcedure;
 
 /**
  * Tenant Admin procedure - FORWARD-LOOKING
  */
-export const tenantAdminProcedure = t.procedure;
+export const tenantAdminProcedure = baseProcedure;
 
 
 // /**
